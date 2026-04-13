@@ -1,0 +1,17 @@
+{
+  "go.toolsManagement.autoUpdate": true,
+  "go.formatTool": "goimports",
+  "go.lintTool": "staticcheck",
+  "go.testFlags": ["-v", "-count=1"],
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "golang.go",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "gopls": {
+    "ui.semanticTokens": true,
+    "ui.completion.usePlaceholders": true
+  }
+}

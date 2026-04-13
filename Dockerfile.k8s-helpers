@@ -1,0 +1,22 @@
+# 供 Kubernetes：CronJob sync（bash/curl/jq）与 gateway-route-daemon（ip/nsenter）共用
+# 基础镜像与仓库中其它清单一致
+#
+# 构建：
+#   docker build -f Dockerfile.k8s-helpers -t 172.29.47.113:8093/jdk-images/http-dns-api-k8s-tools:3.19 .
+# 推送到私有仓库后，把 deploy.yaml / gateway-route-daemon 里 image 改为你的地址，例如：
+#   pro.harbor.pingworth.com/jdk-images/http-dns-api-k8s-tools:3.19
+#
+FROM m.daocloud.io/docker.io/library/alpine:3.19
+
+RUN apk add --no-cache \
+    bash \
+    curl \
+    jq \
+    iproute2 \
+    util-linux \
+    ca-certificates \
+    tzdata \
+    && rm -rf /var/cache/apk/*
+
+# 默认东八区（北京时间）；Pod 仍可用 env 覆盖 TZ
+ENV TZ=Asia/Shanghai

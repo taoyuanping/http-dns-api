@@ -1,0 +1,9 @@
+services:
+  http-dns-api:
+    image: 10.235.138.86:5127/repository/ops-tool/http-dns-api:202604091648
+    ports:
+      - "38080:38080"
+    environment:
+      PORT: "38080"
+      TZ: Asia/Shanghai
+    restart: unless-stopped

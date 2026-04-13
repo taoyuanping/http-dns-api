@@ -1,0 +1,35 @@
+# 主程序构建产物（无扩展名：Linux/macOS；*.exe 见下方）
+/http-dns-api
+
+# coredns-sync 工具（无扩展名二进制；若在本仓库内单独构建）
+/coredns-sync/coredns-sync
+
+# Go
+*.test
+*.out
+coverage.*
+*.coverprofile
+vendor/
+go.work
+go.work.sum
+
+# Windows
+*.exe
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 编辑器 / IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# 本地环境变量（勿提交密钥）
+.env
+.env.local

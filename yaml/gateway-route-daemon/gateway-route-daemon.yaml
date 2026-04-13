@@ -1,0 +1,189 @@
+---
+# 宿主机静态路由：DaemonSet 挂载 gateway-routes（routes）与本脚本，经 nsenter 在宿主机 netns 执行 ip route add（仅新增）。
+# 需要：privileged + hostPID；routes 全文解析（跳过 # 注释），三列：域名 目标IP 下一跳。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-route-daemon-script
+  namespace: node-static-routes
+data:
+  apply-host-routes.sh: |
+    #!/usr/bin/env sh
+    # 读取网关路由文件，在宿主机网络命名空间「仅新增」路由（DaemonSet 内使用）。
+    # 不修改已有路由：使用 ip route add；若已存在（File exists）则跳过。
+    # 路由文件：ConfigMap gateway-routes 的 routes 字段（挂载为 ROUTES_FILE）。
+    # sync 只改写 # BEGIN AUTO-SYNC / # END AUTO-SYNC 之间；本脚本对全文逐行解析（标记行以 # 开头会被跳过）。
+    #
+    # 解析规则：处理全文（跳过空行与 # 注释行）。
+    #  - 三列：名称 + 目标 IPv4 + 下一跳 IPv4  →  ip route add <目标>/32 via <下一跳>
+    #  - 两列且第一列为 CIDR：  ip route add <CIDR> via <下一跳>
+    #
+    # 环境变量：
+    #  ROUTES_FILE   默认 /config/routes
+    #  INTERVAL_SEC  轮询间隔秒，默认 60；设为 0 则只执行一次退出
+    #  NSENTER       默认 nsenter --target 1 --net --（需 hostPID + privileged）
+    
+    set -eu
+    
+    ROUTES_FILE="${ROUTES_FILE:-/config/routes}"
+    INTERVAL_SEC="${INTERVAL_SEC:-60}"
+    NSENTER="${NSENTER:-nsenter --target 1 --net --}"
+    
+    log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [route-daemon] $*"; }
+    warn() { echo "$(date '+%Y-%m-%d %H:%M:%S') [route-daemon] WARN $*"; }
+    
+    is_ipv4() {
+      echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+    }
+    
+    # 仅新增：成功则记日志；已存在则跳过；其它错误才 WARN
+    route_add_only() {
+      desc=$1
+      shift
+      if out=$($NSENTER ip route add "$@" 2>&1); then
+        log "host route add: ${desc} (ok)"
+        return 0
+      fi
+      if echo "$out" | grep -qE 'File exists|already exists'; then
+        log "skip (already exists): ${desc}"
+        return 0
+      fi
+      warn "ip route add failed: ${desc} — $out"
+    }
+    
+    apply_one_three() {
+      dest="$1"
+      via="$2"
+      if ! is_ipv4 "$dest" || ! is_ipv4 "$via"; then
+        warn "skip (need valid IPv4 dest/via): $dest $via"
+        return 0
+      fi
+      route_add_only "${dest}/32 via ${via}" "${dest}/32" via "${via}"
+    }
+    
+    apply_one_cidr() {
+      cidr="$1"
+      via="$2"
+      if ! is_ipv4 "$via"; then
+        warn "skip (bad via): $cidr $via"
+        return 0
+      fi
+      route_add_only "${cidr} via ${via}" "${cidr}" via "${via}"
+    }
+    
+    apply_from_stream() {
+      while IFS= read -r raw || [ -n "${raw}" ]; do
+        line=$(printf '%s' "$raw" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+        case "$line" in
+          \#*) continue ;;
+        esac
+    
+        # read 最多取前 4 列，sync 格式为三列
+        # shellcheck disable=SC2086
+        set -f
+        set -- $line
+        set +f
+    
+        if [ "$#" -ge 3 ]; then
+          apply_one_three "$2" "$3"
+          continue
+        fi
+    
+        if [ "$#" -eq 2 ]; then
+          case "$1" in
+            */*) apply_one_cidr "$1" "$2" ;;
+            *) warn "skip (need 3 cols or CIDR+gw): $line" ;;
+          esac
+          continue
+        fi
+    
+        warn "skip (unrecognized): $line"
+      done
+    }
+    
+    extract_and_apply() {
+      if [ ! -r "$ROUTES_FILE" ]; then
+        warn "cannot read $ROUTES_FILE"
+        return 1
+      fi
+    
+      tr -d '\r' < "$ROUTES_FILE" | apply_from_stream
+    }
+    
+    run_once() {
+      log "apply routes from ${ROUTES_FILE}"
+      extract_and_apply
+    }
+    
+    if [ "$INTERVAL_SEC" -eq 0 ]; then
+      run_once
+      exit 0
+    fi
+    
+    while true; do
+      run_once || true
+      sleep "$INTERVAL_SEC"
+    done
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gateway-route-daemon
+  namespace: node-static-routes
+  labels:
+    app: gateway-route-daemon
+spec:
+  selector:
+    matchLabels:
+      app: gateway-route-daemon
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: gateway-route-daemon
+    spec:
+      hostPID: true
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: apply
+        # 与 Dockerfile.k8s-helpers 构建并推送的镜像一致（见本文件顶部 K8S_HELPERS_IMAGE）
+        image: pro.harbor.pingworth.com/jdk-images/http-dns-api-k8s-tools:3.19
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+        env:
+        - name: ROUTES_FILE
+          value: "/config/routes"
+        - name: INTERVAL_SEC
+          value: "10"
+        volumeMounts:
+        - name: routes
+          mountPath: /config
+          readOnly: true
+        - name: script
+          mountPath: /scripts
+          readOnly: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 20m
+            memory: 64Mi
+        command: ["/bin/sh", "/scripts/apply-host-routes.sh"]
+      volumes:
+      - name: routes
+        configMap:
+          name: gateway-routes
+          items:
+          - key: routes
+            path: routes
+      - name: script
+        configMap:
+          name: gateway-route-daemon-script
+          defaultMode: 493

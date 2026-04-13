@@ -1,0 +1,35 @@
+.:53 {
+    errors
+    health {
+        lameduck 15s
+    }
+    ready
+    hosts {
+        # 测试
+        1.2.3.4 test.baidu.com
+
+        # xxl-job
+        172.28.42.118 xxl-job.pingworth.com
+
+        # BEGIN AUTO-SYNC
+        # END AUTO-SYNC
+
+        # 继续解析
+        fallthrough .
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods verified
+        ttl 30
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf {
+        prefer_udp
+    }
+    cache 30 {
+        servfail 0s
+    }
+    loop
+    reload
+    loadbalance
+}
