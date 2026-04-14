@@ -11,7 +11,7 @@
 # 环境变量：
 #  ROUTES_FILE   默认 /config/routes
 #  INTERVAL_SEC  轮询间隔秒，默认 60；设为 0 则只执行一次退出
-#  NSENTER       默认 nsenter --target 1 --net --（需 hostPID + privileged）
+#  NSENTER       默认 nsenter --target 1 --net --（需 hostPID；容器需 SYS_PTRACE 以打开 /proc/1/ns/net，另需 SYS_ADMIN/NET_ADMIN）
 
 set -eu
 

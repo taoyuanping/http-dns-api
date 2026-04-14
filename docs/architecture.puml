@@ -1,0 +1,104 @@
+@startuml http-dns-api-应用内部
+!theme plain
+title http-dns-api — 应用内部结构（main.go）
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FEFEFE
+
+package "HTTP 服务 (net/http)" {
+  [HTTP Server\n:PORT / 默认 :8080] as srv
+  [路由 /health] as h
+  [路由 GET /?domain=] as r
+}
+
+package "解析逻辑" {
+  [followCNAME\n最多 32 跳] as cname
+  [dnsResolver\nLookupIPAddr / LookupCNAME\nDial 超时 5s] as res
+}
+
+package "外部依赖" {
+  database "系统 DNS\n(/etc/resolv.conf)" as dns
+}
+
+srv --> h : JSON 健康检查
+srv --> r : 查询参数 domain
+r --> cname : 规范化域名
+cname --> res : 跟随 CNAME 链
+r --> res : 解析 canonical 的 A/AAAA
+res --> dns : UDP/TCP 查询
+
+note right of r
+  成功: domain, canonical,
+  cname_chain, ips (v4 后 v6)
+  失败: JSON error + 422
+end note
+
+@enduml
+
+@startuml http-dns-api-部署与生态
+!theme plain
+title http-dns-api — 部署形态与 Kubernetes 集成（yaml/deploy.yaml）
+
+skinparam rectangle {
+  roundCorner 10
+}
+
+actor "运维 / 客户端" as user
+node "Docker / Compose" as dc {
+  artifact "http-dns-api 镜像\n(scratch + 静态二进制)" as img
+}
+
+cloud "Kubernetes 集群" as k8s {
+  frame "node-static-routes" {
+    [CronJob + sync.sh\n(k8s-helpers 镜像)] as cron
+    [ConfigMap\ndomain-list.conf] as cm_dom
+    [ConfigMap\ngateway-routes] as cm_gw
+    [ServiceAccount\ncoredns-updater + RBAC] as sa
+  }
+  frame "kube-system" {
+    [ConfigMap coredns\n(Corefile AUTO-SYNC 段)] as cm_core
+  }
+}
+
+cloud "上游 DNS" as upstream
+
+user --> dc : curl /health, /?domain=
+img --> upstream : 解析请求\n(容器内 resolv.conf)
+
+cron --> cm_dom : 读取域名列表
+cron --> img : **GET ${API_BASE}/?domain=...**\n(并发解析 JSON)
+cron --> cm_gw : PATCH 路由\n(AUTO-SYNC 段)
+cron --> cm_core : PATCH Corefile\n(AUTO-SYNC 段)
+sa .. cron : 挂载凭据
+
+note bottom of cron
+  全部域名解析成功才更新；
+  先网关路由、sleep、再 CoreDNS，
+  避免新 IP 无路由。
+end note
+
+@enduml
+
+@startuml http-dns-api-请求序列
+!theme plain
+title 典型请求：GET /?domain=example.com
+
+actor Client
+participant "http-dns-api" as API
+participant "系统 Resolver" as R
+participant "上游 DNS" as DNS
+
+Client -> API : GET /?domain=example.com
+activate API
+API -> R : LookupCNAME（循环至规范名）
+R -> DNS : DNS 查询
+DNS --> R : CNAME / 无更多 CNAME
+R --> API
+API -> R : LookupIPAddr(canonical)
+R -> DNS : A / AAAA
+DNS --> R
+R --> API : IP 列表
+API -> Client : 200 JSON\n(ips, cname_chain, …)
+deactivate API
+
+@enduml

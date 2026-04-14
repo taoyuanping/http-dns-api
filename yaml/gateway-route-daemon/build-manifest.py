@@ -25,7 +25,8 @@ indented = "\n".join("    " + l for l in lines)
 
 yaml_head = """---
 # 宿主机静态路由：DaemonSet 挂载 gateway-routes（routes）与本脚本，经 nsenter 在宿主机 netns 执行 ip route add（仅新增）。
-# 需要：privileged + hostPID；routes 全文解析（跳过 # 注释），三列：域名 目标IP 下一跳。
+# 禁止 privileged、hostNetwork；hostPID + capabilities：SYS_PTRACE（打开 /proc/1/ns/net）+ SYS_ADMIN（setns）+ NET_ADMIN（ip route）。
+# routes 全文解析（跳过 # 注释），三列：域名 目标IP 下一跳。
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -65,7 +66,14 @@ spec:
         image: {K8S_HELPERS_IMAGE}
         imagePullPolicy: Always
         securityContext:
-          privileged: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+            add:
+              - SYS_PTRACE
+              - SYS_ADMIN
+              - NET_ADMIN
         env:
         - name: ROUTES_FILE
           value: "/config/routes"
