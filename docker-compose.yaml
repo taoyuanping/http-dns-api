@@ -1,5 +1,6 @@
 services:
   http-dns-api:
+    container_name: http-dns-api
     image: 10.235.138.86:5127/repository/ops-tool/http-dns-api:202604091648
     ports:
       - "38080:38080"
